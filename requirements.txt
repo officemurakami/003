@@ -1,7 +1,10 @@
 streamlit
 requests
+fitz
 PyMuPDF
 python-dotenv
+pinecone-client
+google-generativeai
 google-api-python-client
 google-auth
 google-auth-oauthlib
