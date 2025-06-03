@@ -1,105 +1,103 @@
-import streamlit as st
-import google.generativeai as genai
-from pinecone import Pinecone, ServerlessSpec
 import os
+import io
+import fitz  # PyMuPDF
+import streamlit as st
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from pinecone import Pinecone, ServerlessSpec
+import google.generativeai as genai
 import dotenv
 
 # --- 初期設定 ---
-st.set_page_config(page_title="Pinecone連携QAボット", layout="wide", initial_sidebar_state="collapsed")
-st.markdown("""
-    <style>
-    #MainMenu, header, footer {visibility: hidden;}
-    </style>
-""", unsafe_allow_html=True)
-
-# --- 環境変数の読み込み ---
+st.set_page_config(page_title="Drive連携PDFベクトル登録Bot", layout="wide")
 dotenv.load_dotenv()
-API_KEY = os.getenv("API_KEY")
+
+# --- 認証情報 ---
+GEMINI_API_KEY = os.getenv("API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = "pdf-qa-bot"
 PINECONE_REGION = "us-east-1"
 PINECONE_CLOUD = "aws"
 
-# --- Gemini 初期化 ---
-genai.configure(api_key=API_KEY)
-embed_model = genai.GenerativeModel("embedding-001")
-chat_model = genai.GenerativeModel("gemini-1.5-pro")
+# --- Google Drive認証 ---
+creds = service_account.Credentials.from_service_account_info(
+    {
+        "type": os.getenv("type"),
+        "project_id": os.getenv("project_id"),
+        "private_key_id": os.getenv("private_key_id"),
+        "private_key": os.getenv("private_key").replace('\\n', '\n'),
+        "client_email": os.getenv("client_email"),
+        "client_id": os.getenv("client_id"),
+        "auth_uri": os.getenv("auth_uri"),
+        "token_uri": os.getenv("token_uri"),
+        "auth_provider_x509_cert_url": os.getenv("auth_provider_x509_cert_url"),
+        "client_x509_cert_url": os.getenv("client_x509_cert_url"),
+    },
+    scopes=["https://www.googleapis.com/auth/drive.readonly"]
+)
 
-# --- Pinecone 初期化 ---
+drive_service = build("drive", "v3", credentials=creds)
+
+# --- Gemini & Pinecone初期化 ---
+genai.configure(api_key=GEMINI_API_KEY)
+embed_model = genai.GenerativeModel("embedding-001")
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# --- インデックス一覧表示（デバッグ）
-st.markdown("### 📦 Pineconeインデックス一覧")
-try:
-    index_list = pc.list_indexes().names()
-    st.write(index_list)
-except Exception as e:
-    st.error(f"インデックス一覧取得エラー: {e}")
-    index_list = []
+if PINECONE_INDEX_NAME not in pc.list_indexes().names():
+    pc.create_index(
+        name=PINECONE_INDEX_NAME,
+        dimension=1024,
+        metric="cosine",
+        spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
+    )
 
-# --- インデックス作成（存在しない場合のみ）
-if PINECONE_INDEX_NAME not in index_list:
-    with st.spinner("🔧 Pineconeインデックスを作成中..."):
-        try:
-            pc.create_index(
-                name=PINECONE_INDEX_NAME,
-                dimension=1024,  # あなたの環境の設定に合わせて変更済み
-                metric="cosine",
-                spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
-            )
-            st.success(f"✅ インデックス `{PINECONE_INDEX_NAME}` を作成しました")
-        except Exception as e:
-            st.error(f"❌ インデックス作成エラー: {e}")
+index = pc.Index(PINECONE_INDEX_NAME)
 
-# --- インデックスへ接続
-try:
-    index = pc.Index(PINECONE_INDEX_NAME)
-except Exception as e:
-    st.error(f"❌ インデックス接続エラー: {e}")
+# --- ファイル一覧取得（Drive内PDF） ---
+st.markdown("### 📁 Google Drive上のPDFを選択してベクトル登録")
+query = "mimeType='application/pdf'"
+results = drive_service.files().list(q=query, pageSize=10, fields="files(id, name)").execute()
+files = results.get("files", [])
 
-# --- Streamlit 質問フォーム
-with st.form("qa_form"):
-    question = st.text_input("❓ 質問を入力してください", value=st.session_state.get("question", ""))
-    submitted = st.form_submit_button("質問する")
+file_dict = {f["name"]: f["id"] for f in files}
+selected_file = st.selectbox("PDFを選択", list(file_dict.keys()))
 
-# --- 回答処理
-if submitted and question:
-    st.session_state["question"] = question
-    with st.spinner("🔍 回答を生成しています..."):
-        try:
-            user_embedding = embed_model.embed_content(
-                question,
-                task_type="retrieval_query"
-            )["embedding"]
+if st.button("📥 Driveから読み込んでベクトル登録"):
+    file_id = file_dict[selected_file]
 
-            results = index.query(vector=user_embedding, top_k=5, include_metadata=True)
+    # PDFをダウンロード
+    request = drive_service.files().get_media(fileId=file_id)
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    fh.seek(0)
 
-            context = ""
-            for match in results["matches"]:
-                meta = match["metadata"]
-                source = meta.get("source", "不明ファイル")
-                chunk = match.get("values") or ""
-                context += f"\n\n--- {source} ---\n{chunk}"
+    # テキスト抽出
+    text = ""
+    with fitz.open(stream=fh.read(), filetype="pdf") as doc:
+        for page in doc:
+            text += page.get_text()
 
-            prompt = f"""以下の社内文書を参考に質問に答えてください。
+    st.success("📄 テキスト抽出完了")
 
-{context}
+    # チャンク分割
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_text(text)
+    st.write(f"🧩 チャンク数: {len(chunks)}")
 
-Q: {question}
-"""
-            response = chat_model.generate_content(prompt)
-            answer = response.text if hasattr(response, "text") else response.candidates[0]['content']['parts'][0]['text']
-            st.session_state["answer"] = answer
+    # ベクトル化＆Pinecone保存
+    vectors = []
+    for i, chunk in enumerate(chunks):
+        embedding = embed_model.embed_content(chunk, task_type="retrieval_document")["embedding"]
+        vectors.append({
+            "id": f"{selected_file}_{i}",
+            "values": embedding,
+            "metadata": {"source": selected_file, "text": chunk}
+        })
 
-        except Exception as e:
-            st.error(f"❌ 回答生成中のエラー: {e}")
-
-# --- 回答表示
-if st.session_state.get("answer"):
-    st.markdown("### ✅ 回答：")
-    st.write(st.session_state["answer"])
-
-    if st.button("クリア"):
-        for key in ["question", "answer"]:
-            st.session_state.pop(key, None)
-        st.rerun()
+    index.upsert(vectors=vectors)
+    st.success(f"✅ {selected_file} を Pinecone に登録しました")
