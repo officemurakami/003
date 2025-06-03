@@ -17,8 +17,8 @@ dotenv.load_dotenv()
 API_KEY = os.getenv("API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = "pdf-qa-bot"
-PINECONE_REGION = "gcp-starter"  # ← Freeプランで使用可能
-PINECONE_CLOUD = "gcp"           # ← リージョンに対応したクラウド
+PINECONE_REGION = "us-east-1"
+PINECONE_CLOUD = "aws"
 
 # --- Gemini 初期化 ---
 genai.configure(api_key=API_KEY)
@@ -28,22 +28,22 @@ chat_model = genai.GenerativeModel("gemini-1.5-pro")
 # --- Pinecone 初期化 ---
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# --- Pinecone インデックス一覧表示（デバッグ用） ---
+# --- インデックス一覧表示（デバッグ）
 st.markdown("### 📦 Pineconeインデックス一覧")
 try:
     index_list = pc.list_indexes().names()
     st.write(index_list)
 except Exception as e:
-    st.error(f"インデックス一覧取得時のエラー: {e}")
+    st.error(f"インデックス一覧取得エラー: {e}")
     index_list = []
 
-# --- インデックス作成（なければ作る） ---
+# --- インデックス作成（存在しない場合のみ）
 if PINECONE_INDEX_NAME not in index_list:
     with st.spinner("🔧 Pineconeインデックスを作成中..."):
         try:
             pc.create_index(
                 name=PINECONE_INDEX_NAME,
-                dimension=768,
+                dimension=1024,  # あなたの環境の設定に合わせて変更済み
                 metric="cosine",
                 spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
             )
