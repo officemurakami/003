@@ -17,7 +17,8 @@ dotenv.load_dotenv()
 API_KEY = os.getenv("API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = "pdf-qa-bot"
-PINECONE_REGION = "us-west-2"  # ← Pinecone Consoleで確認したものに変更する必要あり！
+PINECONE_REGION = "gcp-starter"  # ← Freeプランで使用可能
+PINECONE_CLOUD = "gcp"           # ← リージョンに対応したクラウド
 
 # --- Gemini 初期化 ---
 genai.configure(api_key=API_KEY)
@@ -27,15 +28,16 @@ chat_model = genai.GenerativeModel("gemini-1.5-pro")
 # --- Pinecone 初期化 ---
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# ✅ 現在のインデックス一覧を表示（デバッグ用）
+# --- Pinecone インデックス一覧表示（デバッグ用） ---
 st.markdown("### 📦 Pineconeインデックス一覧")
 try:
     index_list = pc.list_indexes().names()
     st.write(index_list)
 except Exception as e:
     st.error(f"インデックス一覧取得時のエラー: {e}")
+    index_list = []
 
-# --- インデックス自動作成（存在しない場合のみ）
+# --- インデックス作成（なければ作る） ---
 if PINECONE_INDEX_NAME not in index_list:
     with st.spinner("🔧 Pineconeインデックスを作成中..."):
         try:
@@ -43,13 +45,11 @@ if PINECONE_INDEX_NAME not in index_list:
                 name=PINECONE_INDEX_NAME,
                 dimension=768,
                 metric="cosine",
-                spec=ServerlessSpec(cloud="aws", region=PINECONE_REGION)  # ←要確認！
+                spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
             )
             st.success(f"✅ インデックス `{PINECONE_INDEX_NAME}` を作成しました")
         except Exception as e:
-            st.error(f"❌ インデックス作成時のエラー: {e}")
-else:
-    st.success(f"✅ インデックス `{PINECONE_INDEX_NAME}` はすでに存在します")
+            st.error(f"❌ インデックス作成エラー: {e}")
 
 # --- インデックスへ接続
 try:
@@ -57,12 +57,12 @@ try:
 except Exception as e:
     st.error(f"❌ インデックス接続エラー: {e}")
 
-# --- 質問フォーム
+# --- Streamlit 質問フォーム
 with st.form("qa_form"):
     question = st.text_input("❓ 質問を入力してください", value=st.session_state.get("question", ""))
     submitted = st.form_submit_button("質問する")
 
-# --- 回答生成処理
+# --- 回答処理
 if submitted and question:
     st.session_state["question"] = question
     with st.spinner("🔍 回答を生成しています..."):
@@ -92,7 +92,7 @@ Q: {question}
             st.session_state["answer"] = answer
 
         except Exception as e:
-            st.error(f"❌ エラーが発生しました: {e}")
+            st.error(f"❌ 回答生成中のエラー: {e}")
 
 # --- 回答表示
 if st.session_state.get("answer"):
