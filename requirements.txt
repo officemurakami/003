@@ -1,9 +1,9 @@
 streamlit
-requests
-PyMuPDF>=1.22.3
+google-auth
+google-auth-oauthlib
+google-api-python-client
+PyMuPDF
 python-dotenv
 pinecone-client==3.0.1
 google-generativeai
-google-api-python-client
-google-auth
-google-auth-oauthlib
+langchain
