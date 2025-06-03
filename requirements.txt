@@ -1,7 +1,6 @@
 streamlit
 requests
-fitz
-PyMuPDF
+PyMuPDF>=1.22.3
 python-dotenv
 pinecone-client==3.0.1
 google-generativeai
